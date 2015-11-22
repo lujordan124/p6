@@ -15,6 +15,7 @@ typedef struct superBlock
 	int directoryIndex;
 	int directoryEntries;
 	int fatIndex;
+	int fatLength;
 	int dataIndex;
 } superBlock;
 
@@ -27,7 +28,7 @@ typedef struct directoryEntry
 
 typedef struct fatEntry 
 {
-	int fats[4];
+	int fatTable[4];
 } fatEntry;
 
 typedef struct fileDescriptor
@@ -39,8 +40,8 @@ typedef struct fileDescriptor
 
 superBlock sB;
 vector<fileDescriptor> fileDescriptors(4);
-directoryEntry directory[5];
-fatEntry fat[8];
+directoryEntry *directory;
+fatEntry FAT[8];
 int isOpen(char *name);
 int getFreeFileDescriptors();
 int getFileIndex(char *file_name);
@@ -73,7 +74,7 @@ int make_fs(char *disk_name)
 	sB.directoryIndex = 1;
 	sB.directoryEntries = 0;
 	sB.fatIndex = 6;
-
+	sB.fatLength = 0;
 	sB.dataIndex = 32;
 
 	memset(buffer, 0, BLOCK_SIZE);
@@ -81,7 +82,20 @@ int make_fs(char *disk_name)
     block_write(0, buffer);
 
 	//initialize Directory and FAT
-	for (i = 1; i < 13; i++) {
+	for (i = 1; i < 5; i++) {
+		block_write(i, buffer);
+	}
+
+	int j; 
+	for (i = 0; i < 8; i++) {
+		for (j = 0; j < 4; j++) {
+			FAT[i].fatTable[j] = -1;
+		}
+	}
+
+	for (i = 6; i < 14; i++) {
+		memset(buffer, 0, BLOCK_SIZE);
+		memcpy(buffer, &FAT[i - 6], sizeof(struct fatEntry));
 		block_write(i, buffer);
 	}
 
@@ -116,13 +130,27 @@ int mount_fs(char *disk_name)
 
 	// cout << sB.directoryIndex << " " << sB.directoryEntries << " " << sB.fatIndex << " " << sB.fatEntries << " " << sB.dataIndex << endl;
 
-	//Load FAT
-
+	int i;
+	char *p =  (char *)directory
 	//Load Directory
+	for(i = 1; i < 6; i++, p += BLOCK_SIZE) {
+		block_read(sB.directoryIndex + i, buffer);
+		memcpy(p, buffer, BLOCK_SIZE);
+	}
+
+	//Load FAT
+	for(i = 6; i < 14; i++) {
+		int block = block_read(i, buffer);
+		fatEntry *fat = new fatEntry;
+		fat = (fatEntry *)buffer;
+		int k;
+		for (k = 0; k < 4; k++) {
+			FAT[i-6].fatTable[k] = fat->fatTable[k];
+		}
+	}
 
 	//Initialize File Descriptors
-	int i;
-	for (i = 0; i < 4; i++) {
+	for(i = 0; i < 4; i++) {
 		fileDescriptors.push_back(fileDescriptor());
 		fileDescriptors[i].free = 0;
 		fileDescriptors[i].file = 0;
@@ -134,13 +162,35 @@ int mount_fs(char *disk_name)
 
 int dismount_fs(char *disk_name)
 {
-	if (close_disk() != -1) {
-		return 0;
+	char buffer[BLOCK_SIZE];
+	int i;
+
+	//write directory
+	char *p = (char *)directory;
+	for (i = 0; i < 5; i++, p += BLOCK_SIZE) {
+		memcpy(buffer, p, BLOCK_SIZE);
+		block_write(sB.directoryIndex + i, buffer);
 	}
 
-	return -1;
+	//write FAT
+	for (i = 6; i < 14; i++) {
+		memset(buffer, 0, BLOCK_SIZE);
+		memcpy(buffer, &FAT[i - 6], sizeof(struct fatEntry));
+		block_write(i, buffer);
+	}
 
-	//Update Everything	
+	//clear fileDescriptors
+	for (i = 0; i < 4; i++) {
+		fileDescriptors[i].free = 0;
+		fileDescriptors[i].file = 0;
+		fileDescriptors[i].offset = 0;
+	}
+
+	if (close_disk() != 0) {
+		return -1;
+	}
+
+	return 0;
 }
 
 int fs_open(char *name)
@@ -154,7 +204,6 @@ int fs_close(int fildes)
 		cout << "Bad file descriptor" << endl;
 		return -1;
 	}
-
 
 	fileDescriptors[fildes].free = 0;
 	fileDescriptors[fildes].file = 0;
