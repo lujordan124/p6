@@ -43,8 +43,8 @@ int main() {
   fda = fs_open("fa");
   char bufa[] = "The goal of this project";
   nbyte = 24;
-  fs_write(fda,&bufa,nbyte);
 
+  fs_write(fda,&bufa,nbyte);
   fs_create("fb");
   fdb = fs_open("fb");
   char bufb[] = "CS4414 is fun";

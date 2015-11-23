@@ -7,7 +7,7 @@ CXX	= g++
 
 
 main:	myApp.cpp
-	$(CXX) -w myApp.cpp fileSystem.cpp disk.cpp
+	$(CXX) myApp.cpp fileSystem.cpp disk.cpp
 
 clean:
 	/bin/rm -f *.o *~
