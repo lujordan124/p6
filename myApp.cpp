@@ -5,6 +5,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include "fileSystem.h"
+#include <iostream>
+
+using namespace std;
 
 int make_fs(char *disk_name);
 int mount_fs(char *disk_name);

@@ -15,7 +15,6 @@ typedef struct superBlock
 	int directoryIndex;
 	int directoryEntries;
 	int fatIndex;
-	int fatLength;
 	int dataIndex;
 } superBlock;
 
@@ -33,7 +32,7 @@ typedef struct fatEntry
 
 typedef struct fileDescriptor
 {
-	int free;
+	int used;
 	int file;
 	int offset;
 } fileDescriptor;
@@ -42,6 +41,8 @@ superBlock sB;
 vector<fileDescriptor> fileDescriptors(4);
 directoryEntry *directory;
 fatEntry FAT[8];
+int getFreeFat();
+int getFreeDirectoryIndex();
 int isOpen(char *name);
 int getFreeFileDescriptors();
 int getFileIndex(char *file_name);
@@ -74,7 +75,6 @@ int make_fs(char *disk_name)
 	sB.directoryIndex = 1;
 	sB.directoryEntries = 0;
 	sB.fatIndex = 6;
-	sB.fatLength = 0;
 	sB.dataIndex = 32;
 
 	memset(buffer, 0, BLOCK_SIZE);
@@ -82,14 +82,15 @@ int make_fs(char *disk_name)
     block_write(0, buffer);
 
 	//initialize Directory and FAT
-	for (i = 1; i < 5; i++) {
-		block_write(i, buffer);
+	char buffer2[BLOCK_SIZE];
+	for (i = 1; i < 6; i++) {
+		block_write(i, buffer2);
 	}
 
 	int j; 
 	for (i = 0; i < 8; i++) {
 		for (j = 0; j < 4; j++) {
-			FAT[i].fatTable[j] = -1;
+			FAT[i].fatTable[j] = -2;
 		}
 	}
 
@@ -131,11 +132,13 @@ int mount_fs(char *disk_name)
 	// cout << sB.directoryIndex << " " << sB.directoryEntries << " " << sB.fatIndex << " " << sB.fatEntries << " " << sB.dataIndex << endl;
 
 	int i;
-	char *p =  (char *)directory
-	//Load Directory
-	for(i = 1; i < 6; i++, p += BLOCK_SIZE) {
+	directory = (directoryEntry *) malloc(5 * BLOCK_SIZE);
+	char *p = (char *)directory;
+	// //Load Directory
+	for(i = 0; i < 5; i++) {
 		block_read(sB.directoryIndex + i, buffer);
 		memcpy(p, buffer, BLOCK_SIZE);
+		p += BLOCK_SIZE;
 	}
 
 	//Load FAT
@@ -152,7 +155,7 @@ int mount_fs(char *disk_name)
 	//Initialize File Descriptors
 	for(i = 0; i < 4; i++) {
 		fileDescriptors.push_back(fileDescriptor());
-		fileDescriptors[i].free = 0;
+		fileDescriptors[i].used = 0;
 		fileDescriptors[i].file = 0;
 	}
 
@@ -181,7 +184,7 @@ int dismount_fs(char *disk_name)
 
 	//clear fileDescriptors
 	for (i = 0; i < 4; i++) {
-		fileDescriptors[i].free = 0;
+		fileDescriptors[i].used = 0;
 		fileDescriptors[i].file = 0;
 		fileDescriptors[i].offset = 0;
 	}
@@ -195,19 +198,35 @@ int dismount_fs(char *disk_name)
 
 int fs_open(char *name)
 {
-	return 0;
+	int file;
+	file = getFileIndex(name);
+	if (file == -1) {
+		cout << "Cannot find file" << endl; 
+		return -1;
+	}
+
+	int fd = getFreeFileDescriptors();
+	if (fd == -1) {
+		cout << "No free file descriptors available" << endl;
+		return -1;
+	}
+
+	fileDescriptors[fd].used = 1;
+	fileDescriptors[fd].file = file;
+	fileDescriptors[fd].offset = 0;
+
+	return fd;
 }
 
 int fs_close(int fildes)
 {
-	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].free == 1) {
+	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].used == 1) {
 		cout << "Bad file descriptor" << endl;
 		return -1;
 	}
 
-	fileDescriptors[fildes].free = 0;
+	fileDescriptors[fildes].used = 0;
 	fileDescriptors[fildes].file = 0;
-	//reset file in directory
 	return 0;
 }
 
@@ -224,8 +243,21 @@ int fs_create(char *name)
 			cout << "You have already reached the max number of files." << endl;
 			return -1;
 		}
-		//MAKE THE FILE HERE??
+		
+		int index = getFreeDirectoryIndex();
+		strcpy(directory[index].fileName, name);
+		directory[index].fileSize = 0;
+		int fatIndex = getFreeFat();
+		if (fatIndex == -1) {
+			cout << "Fat is full" << endl;
+		}
 
+		directory[index].dataHead = fatIndex;
+		int fatNum = fatIndex / 4;
+		int fatCell = fatIndex % 4;
+
+		FAT[fatNum].fatTable[fatCell] = EOF;
+		sB.directoryEntries += 1;
 	} else {
 		cout << "File already exists" << endl;
 		return -1;
@@ -242,7 +274,24 @@ int fs_delete(char *name)
 			return -1;
 		}
 
-		//DELETE FILE HERE
+		directory[file].fileSize = 0;
+		int head = directory[file].dataHead;
+		int fatIndex = head / 4;
+		int fatTableIndex = head % 4;
+		int next = FAT[fatIndex].fatTable[fatTableIndex];
+
+		int temp, temp2, temp3;
+
+	while (next != EOF) {
+		temp = next / 4;
+		temp2 = next % 4;
+		temp3 = FAT[temp].fatTable[temp2];
+		FAT[temp].fatTable[temp2] = -2;
+		next = temp3;
+	}
+
+	sB.directoryEntries--;
+
 		return 0;
 	} else {
 		cout << "File does not exist" << endl;
@@ -258,23 +307,78 @@ int fs_read(int fildes, void *buf, size_t nbyte)
 
 int fs_write(int fildes, void *buf, size_t nbyte)
 {
+	if (nbyte < 1) {
+		cout << "Size of nbyte is invalid" << endl;
+		return -1;
+	}
+
+	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].used == 1) {
+		cout << "Bad file descriptor" << endl;
+		return -1;
+	}
+
+	if (getFreeFat() == -1) {
+		cout << "Data blocks are all full" << endl;
+		return -1;
+	}
+
+	directoryEntry *entry = &directory[fileDescriptors[fildes].file];
+	int old = entry->fileSize;
+	int offset = old % BLOCK_SIZE;
+	int newSize = old + nbyte;
+	int newBlocks = (newSize / BLOCK_SIZE) - (old / BLOCK_SIZE);
+	int fatBlock = entry->dataHead / 4;
+	int fatTableIndex = entry->dataHead % 4;
+	entry->fileSize = newSize;
+
+	while (fatBlock != EOF) {
+		fatBlock = FAT[fatBlock].fatTable[fatTableIndex] / 4;
+		fatTableIndex = FAT[fatBlock].fatTable[fatTableIndex] % 4;
+	}
+
+	char *toWrite = (char *)buf;
+	char buffer[BLOCK_SIZE];
+	int amount = nbyte;
+
+	if (newBlocks == 0) {
+		memcpy(buffer + offset, toWrite, strlen(toWrite));
+		block_write(FAT[fatBlock].fatTable[fatTableIndex], buffer);
+	} else if (newBlocks > 0) {
+		if (offset != 0) {
+			memcpy(buffer + offset, toWrite, BLOCK_SIZE - offset);
+			block_write(FAT[fatBlock].fatTable[fatTableIndex], buffer);
+			toWrite = toWrite + (BLOCK_SIZE - offset);
+		}
+
+		int j;
+		for (j = 0; j < newBlocks; j++) {
+			memcpy(buffer, toWrite, BLOCK_SIZE);
+			int nextFat = getFreeFat();
+			FAT[fatBlock].fatTable[fatTableIndex] = nextFat;
+			int updateBlock = nextFat / 4;
+			int updateFatTableIndex = nextFat % 4;
+			FAT[updateBlock].fatTable[updateFatTableIndex] = EOF;
+			block_write(nextFat, buffer);
+			toWrite = toWrite + BLOCK_SIZE;
+		}
+	}
+
 	return 0;
 }
 
 int fs_get_filesize(int fildes)
 {
-	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].free == 1) {
+	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].used == 1) {
 		cout << "Bad file descriptor" << endl;
 		return -1;
 	}
-
 
 	return directory[fileDescriptors[fildes].file].fileSize;
 }
 
 int fs_lseek(int fildes, off_t offset)
 {
-	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].free == 1) {
+	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].used == 1) {
 		cout << "Bad file descriptor" << endl;
 		return -1;
 	}
@@ -290,7 +394,7 @@ int fs_lseek(int fildes, off_t offset)
 
 int fs_truncate(int fildes, off_t length)
 {
-	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].free == 1) {
+	if (fildes < 0 || fildes >= 4 || fileDescriptors[fildes].used == 1) {
 		cout << "Bad file descriptor" << endl;
 		return -1;
 	}
@@ -300,15 +404,66 @@ int fs_truncate(int fildes, off_t length)
 		return -1;
 	}
 
+	struct directoryEntry *file = &directory[fileDescriptors[fildes].file];
 
+	int numBlocks = length/BLOCK_SIZE;
+	int numBytes = length % BLOCK_SIZE;
+	int fatBlock = file->dataHead / 4;
+	int fatTableIndex = file->dataHead % 4;
+	int i;
+	for (i = 0; i < numBlocks; i++) {
+		fatBlock = FAT[fatBlock].fatTable[fatTableIndex] / 4;
+		fatTableIndex = FAT[fatBlock].fatTable[fatTableIndex] % 4;
+	}
+
+	int next = FAT[fatBlock].fatTable[fatTableIndex];
+	int temp, temp2, temp3;
+
+	while (next != EOF) {
+		temp = next / 4;
+		temp2 = next % 4;
+		temp3 = FAT[temp].fatTable[temp2];
+		FAT[temp].fatTable[temp2] = -2;
+		next = temp3;
+	}
+
+	for (i = BLOCK_SIZE - numBytes; i < BLOCK_SIZE; i++) {
+
+	}
+
+	file->fileSize = length;
 
 	return 0;
+}
+
+int getFreeFat() {
+	int i, j;
+	for (i = 0; i < 8; i++) {
+		for (j = 0; j < 4; j++) {
+	 		if (FAT[i].fatTable[j] == -2) {
+	 			return (i*4) + j;
+	 		}
+		}
+	}
+
+	return -1;
+}
+
+int getFreeDirectoryIndex() {
+	int i;
+	for (i = 0; i < 8; i++) {
+		if (directory[i].fileSize == -1) {
+			return i;
+		}
+	}
+
+	return -1;
 }
 
 int getFileIndex(char *file_name) 
 {
 	int i;
-	for (i = 0; i < 5; i++) {
+	for (i = 0; i < 8; i++) {	
 		if (!strcmp(directory[i].fileName, file_name)) {
 			return i;
 		}
@@ -321,7 +476,7 @@ int getFreeFileDescriptors()
 {
 	int i;
 	for (i = 0; i < 4; i++) {
-		if (fileDescriptors[i].free == 0) {
+		if (fileDescriptors[i].used == 0) {
 			return i;
 		}
 	}
@@ -336,16 +491,6 @@ int isOpen(char *name) {
 			return 1;
 		}
 	}
-
-	return 0;
-}
-
-int main() {
-	string name = "hi";
-	char *cstr = new char[name.length() + 1];
-	strcpy(cstr, name.c_str());
-	int file = make_fs(cstr);
-	file = mount_fs(cstr);
 
 	return 0;
 }
