@@ -40,7 +40,7 @@ typedef struct fileDescriptor
 } fileDescriptor;
 
 superBlock sB;
-vector<fileDescriptor> fileDescriptors(5);
+vector<fileDescriptor> fileDescriptors(4);
 directoryEntry directory[8];
 fatEntry FAT[32];
 int getFreeFat();
@@ -198,8 +198,13 @@ int fs_open(char *name)
 
 int fs_close(int fildes)
 {
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 1" << endl;
+		return -1;
+	}
+
+	if (fileDescriptors[fildes].used == 0) {
+		cout << "File was not open" << endl;
 		return -1;
 	}
 
@@ -284,7 +289,7 @@ int fs_read(int fildes, void *buf, size_t nbyte)
 		return -1;
 	}
 
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 2" << endl;
 		return -1;
 	}
@@ -345,7 +350,7 @@ int fs_write(int fildes, void *buf, size_t nbyte)
 		return -1;
 	}
 
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 2" << endl;
 		return -1;
 	}
@@ -427,7 +432,7 @@ int fs_write(int fildes, void *buf, size_t nbyte)
 
 int fs_get_filesize(int fildes)
 {
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 3" << endl;
 		return -1;
 	}
@@ -442,7 +447,7 @@ int fs_get_filesize(int fildes)
 
 int fs_lseek(int fildes, off_t offset)
 {
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 4" << endl;
 		return -1;
 	}
@@ -452,13 +457,17 @@ int fs_lseek(int fildes, off_t offset)
 		return -1;
 	}
 
-	fileDescriptors[fildes].offset = fileDescriptors[fildes].offset + offset;
+	if (offset < 0) {
+		fileDescriptors[fildes].offset = fileDescriptors[fildes].offset + offset;
+	} else {
+		fileDescriptors[fildes].offset = offset;	
+	}
 	return 0;
 }
 
 int fs_truncate(int fildes, off_t length)
 {
-	if (fildes < 0 || fildes >= 5) {
+	if (fildes < 0 || fildes >= 4) {
 		cout << "Bad file descriptor 5" << endl;
 		return -1;
 	}
